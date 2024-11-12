@@ -1,11 +1,69 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <cuda_runtime.h>
 
 #include "fft.h"
+#include "util.h"
 
-__device__ int bit_reverse(unsigned int n, int size) {
-    int log_n = ceil(log2l(size));
-    int limit = ceil(((double)log_n / 2));
+struct fft_instance {
+    int size;
+    complex_t* twiddle_factors;
+    complex_t* device_twiddle_factors;
+    complex_t* buf1;
+    complex_t* buf2;
+};
+
+void create_twiddle_factors_lookup(int n, complex_t* twiddle_factors) {
+    complex_t w = {1,0};
+    complex_t w_n = {cos(-TWO_PI/n), sin(-TWO_PI/n)};
+    for (int i = 0; i < n; i++) {
+        twiddle_factors[i] = w;
+        float w_r = w.real*w_n.real - w.imag*w_n.imag;
+        float w_i = w.real*w_n.imag + w.imag*w_n.real;
+
+        w.real = w_r; w.imag = w_i;
+    }
+}
+
+struct fft_instance* alloc_fft_instance(int size) {
+    struct fft_instance* output = (struct fft_instance*) malloc(sizeof(fft_instance));
+
+    int bytes = sizeof(complex_t)*size;
+
+    // Allocating Host Side Twiddle Factors
+    complex_t* twiddle_factors = (complex_t*) malloc(bytes);
+    create_twiddle_factors_lookup(size, twiddle_factors);
+
+    // Allocating Device Side Twiddle Factors
+    complex_t* device_twiddle_factors = 0;
+    cudaMalloc((void**)&device_twiddle_factors, bytes);
+    cudaMemcpy(device_twiddle_factors, twiddle_factors, bytes, cudaMemcpyHostToDevice);
+
+    complex_t* buf1;
+    complex_t* buf2;
+    cudaMalloc((void**)&buf1, bytes);
+    cudaMalloc((void**)&buf2, bytes);
+
+    output->size = size;
+    output->twiddle_factors = twiddle_factors;
+    output->device_twiddle_factors = device_twiddle_factors;
+    output->buf1 = buf1;
+    output->buf2 = buf2;
+
+    return output;
+}
+
+void free_fft_instance(struct fft_instance* fft) {
+    free(fft->twiddle_factors);
+    cudaFree(fft->device_twiddle_factors);
+    cudaFree(fft->buf1);
+    cudaFree(fft->buf2);
+    free(fft);
+}
+
+__device__ int bit_reverse_device(unsigned int n, int size) {
+    int log_n = ceil(log2f(size));
+    int limit = ceil(((float)log_n / 2));
 
     unsigned int output = 0;
     for (int i = 0; i < limit; i++) {
@@ -22,98 +80,102 @@ __device__ int bit_reverse(unsigned int n, int size) {
     return output;
 }
 
-__device__ void create_bit_reverse_lookup(int n, unsigned int* lookup) {
-    for (int i = 0; i < n; i++) {
-        lookup[i] = bit_reverse(i, n);
-    }
-}
-
-__device__ void create_twiddle_factors_lookup(int n, complex_t twiddle_factors) {
-    int log_n = ceil(log2l(n));
-    for (int i = 0; i < log_n; i++) {
-        int m = 1 << i;
-        twiddle_factors[i] = (complex_t) {cos(-TWO_PI/m), sin(-TWO_PI/m)};
-    }
-}
-
-__global__ void copy_to_output(double* arr, complex_t* output, unsigned int* rev_i_lookup) {
+__global__ void copy_to_output(float* arr, complex_t* output, int n) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned int rev_i = rev_i_lookup[index];
+    unsigned int rev_i = bit_reverse_device(index,n);
     output[rev_i].real = arr[index];
+    output[rev_i].imag = 0;
 }
 
-__global__ void partial_butterfly_op(complex_t* input, complex_t* output, int n, int m2, int step_size, complex_t* twiddle_factors) 
+__global__ void partial_butterfly_op(complex_t* input, complex_t* output, int n, int m2, int step_size, int module_mask, complex_t* twiddle_factors) 
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
 
     int local_index = index % n;
 
-    int pos_or_neg = 0;
-    if (local_index >= n / 2) {
+    int pos_or_neg = 1;
+
+    if (local_index >= n/2) {
         pos_or_neg = -1;
     }
+
+    int reach_index = index + pos_or_neg*m2;
+    
+    int i1, i2;
+    if (local_index >= n/2) {
+        i1 = index;
+        i2 = reach_index;
+    }
     else {
-        pos_or_neg = 1;
+        i1 = reach_index;
+        i2 = index;
     }
 
-    // need to change these
-    int i1 = index + pos_or_neg*m2;
-    int i2 = index;
-    int twi = step_size * local_index;
+    int twi = (step_size * local_index) & module_mask;
 
     complex_t w = twiddle_factors[twi];
 
-    double t_r = w.real*input[i1].real - w.imag*input[i1].imag;
-    double t_i = w.real*input[i1].imag + w.imag*input[i1].real;
+    float t_r = w.real*input[i1].real - w.imag*input[i1].imag;
+    float t_i = w.real*input[i1].imag + w.imag*input[i1].real;
     complex_t t = {t_r, t_i};
-    complex_t u = output[i2];
-    
+    complex_t u = input[i2];
+
     output[index].real = u.real + pos_or_neg*t.real; 
     output[index].imag = u.imag + pos_or_neg*t.imag;
+
+    printf("index=%d; local_index=%d; pos_or_neg=%d; i1=%d; i2=%d; twi=%d; w=%f+%fi;\n\tinput=%f+%fi; t=%f+%fi; u=%f+%fi; output=%f+%fi\n\n", index, local_index, pos_or_neg, i1, i2, 
+           twi, w.real, w.imag, input[i1].real, input[i1].imag, t.real, t.imag, u.real, u.imag, output[i2].real, output[i2].imag);
+    
+}
+
+void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
+    int size = fft->size;
+    complex_t* device_twiddle_factors = fft->device_twiddle_factors;
+    complex_t* dev_input = fft->buf1;
+    complex_t* dev_output = fft->buf2;
+
+    int log_n = ceil(log2f(size));
+
+    // Allocate memory and perform bit reversing on device
+    int bytes =  sizeof(float)*size;
+    float* device_arr;
+    cudaMalloc((void**)&device_arr, bytes);
+    cudaMemcpy(device_arr, arr, bytes, cudaMemcpyHostToDevice);
+    copy_to_output<<<1,size>>>(device_arr, dev_input, size);
+    cudaDeviceSynchronize();
+    cudaFree(device_arr);
+
+    int step_size = size;
+    for (int i = 0; i < log_n; i++) {
+        int m = 1 << i;
+        int m2 = m >> 1;
+        step_size = step_size >> 1;
+        partial_butterfly_op<<<1,size>>>(dev_input, dev_output, m, m2, step_size, size/2 - 1, device_twiddle_factors);
+        cudaDeviceSynchronize();
+        complex_t* tmp = dev_output;
+        dev_output = dev_input;
+        dev_input = tmp;
+    }
+
+    bytes = sizeof(complex_t)*size;
+    cudaMemcpy(output, dev_input, bytes, cudaMemcpyDeviceToHost);
 }
 
 int main()
 {
     int size = 8;
-    double arr[] = {1, 6, 3, 8, 9, 5, 4, 2};
 
-    int bytes =  sizeof(unsigned int)*size;
-    unsigned int* rev_bit_lookup = (unsigned int*) malloc(bytes);
-    create_bit_reverse_lookup(size, rev_bit_lookup);
-    
-    unsigned int* device_rev_bit_lookup = 0;
-    cudaMalloc((void**)&device_rev_bit_lookup, bytes);
-    cudaMemcpy(rev_bit_lookup, device_rev_bit_lookup, bytes, cudaMemcpyHostToDevice);
+    struct fft_instance* fft_inst = alloc_fft_instance(size);
+ 
+    // Allocating Host Side Array
+    float arr[] = {1, 6, 3, 8, 9, 5, 4, 2};
+    complex_t* output = (complex_t*) malloc(size*sizeof(complex_t));
 
-    int bytes = sizeof(complex_t)*ceil(log2l(size));
-    complex_t* twiddle_factors = (complex_t*) malloc(bytes);
-    create_twiddle_factors_lookup(size, twiddle_factors);
+    cuda_fft(arr, output, fft_inst);
 
-    complex_t* device_twiddle_factors = 0;
-    cudaMalloc((void**)&device_twiddle_factors, bytes);
-    cudaMemcpy(twiddle_factors, device_twiddle_factors, bytes, cudaMemcpyHostToDevice);
+    print_complex_array(output, size);
 
-    int bytes =  sizeof(unsigned int)*size;
-    double* device_arr = 0;
-    cudaMalloc((void**)&device_arr, bytes);
-    cudaMemcpy(arr, device_arr, bytes, cudaMemcpyHostToDevice);
-
-    int bytes =  sizeof(complex_t)*size;
-    complex_t* input =  (complex_t*) malloc(bytes);
-    complex_t* device_input = 0;
-    cudaMalloc((void**)&device_input, bytes);
-
-    int bytes =  sizeof(complex_t)*size;
-    complex_t* output =  (complex_t*) malloc(bytes);
-    complex_t* device_output = 0;
-    cudaMalloc((void**)&device_output, bytes);
-
-    copy_to_output<<<1,size>>>(device_arr, device_input, device_rev_i_lookup);
-    cudaDeviceSynchronize();
-
-    cudaMemcpy(twiddle_factors, device_twiddle_factors, bytes, cudaMemcpyHostToDevice);
-
-
+    free_fft_instance(fft_inst);
 
     return 0;
 }
