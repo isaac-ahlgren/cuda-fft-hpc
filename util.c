@@ -19,14 +19,14 @@ void gen_rand(float* arr, int n, float min, float max) {
 
 void print_real_array(float* arr, int n) {
     for (int i = 0; i < n; i++) {
-        printf("%f ", arr[i]);
+        printf("%f, ", arr[i]);
     }
     printf("\n\n");
 }
 
 void print_complex_array(complex_t* arr, int n) {
     for (int i = 0; i < n; i++) {
-        printf("%f+%fi ", arr[i].real, arr[i].imag);
+        printf("%f+%fi, ", arr[i].real, arr[i].imag);
     }
     printf("\n\n");
 }

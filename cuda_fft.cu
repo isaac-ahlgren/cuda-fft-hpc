@@ -3,15 +3,8 @@
 #include <cuda_runtime.h>
 
 #include "fft.h"
+#include "cuda_fft.hpp"
 #include "util.h"
-
-struct fft_instance {
-    int size;
-    complex_t* twiddle_factors;
-    complex_t* device_twiddle_factors;
-    complex_t* buf1;
-    complex_t* buf2;
-};
 
 void create_twiddle_factors_lookup(int n, complex_t* twiddle_factors) {
     complex_t w = {1,0};
@@ -119,12 +112,12 @@ __global__ void partial_butterfly_op(complex_t* input, complex_t* output, int n,
     float t_i = w.real*input[i1].imag + w.imag*input[i1].real;
     complex_t t = {t_r, t_i};
     complex_t u = input[i2];
-
+    
     output[index].real = u.real + pos_or_neg*t.real; 
     output[index].imag = u.imag + pos_or_neg*t.imag;
 
-    printf("index=%d; local_index=%d; pos_or_neg=%d; i1=%d; i2=%d; twi=%d; w=%f+%fi;\n\tinput=%f+%fi; t=%f+%fi; u=%f+%fi; output=%f+%fi\n\n", index, local_index, pos_or_neg, i1, i2, 
-           twi, w.real, w.imag, input[i1].real, input[i1].imag, t.real, t.imag, u.real, u.imag, output[i2].real, output[i2].imag);
+    //printf("index=%d; local_index=%d; pos_or_neg=%d; i1=%d; i2=%d; twi=%d; w=%f+%fi;\n\tinput=%f+%fi; t=%f+%fi; u=%f+%fi; output=%f+%fi\n\n", index, local_index, pos_or_neg, i1, i2, 
+    //       twi, w.real, w.imag, input[i1].real, input[i1].imag, t.real, t.imag, u.real, u.imag, output[i2].real, output[i2].imag);
     
 }
 
@@ -147,11 +140,12 @@ void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
 
     int step_size = size;
     for (int i = 0; i < log_n; i++) {
-        int m = 1 << i;
+        int m = 1 << (i+1);
         int m2 = m >> 1;
         step_size = step_size >> 1;
         partial_butterfly_op<<<1,size>>>(dev_input, dev_output, m, m2, step_size, size/2 - 1, device_twiddle_factors);
         cudaDeviceSynchronize();
+
         complex_t* tmp = dev_output;
         dev_output = dev_input;
         dev_input = tmp;
@@ -159,23 +153,4 @@ void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
 
     bytes = sizeof(complex_t)*size;
     cudaMemcpy(output, dev_input, bytes, cudaMemcpyDeviceToHost);
-}
-
-int main()
-{
-    int size = 8;
-
-    struct fft_instance* fft_inst = alloc_fft_instance(size);
- 
-    // Allocating Host Side Array
-    float arr[] = {1, 6, 3, 8, 9, 5, 4, 2};
-    complex_t* output = (complex_t*) malloc(size*sizeof(complex_t));
-
-    cuda_fft(arr, output, fft_inst);
-
-    print_complex_array(output, size);
-
-    free_fft_instance(fft_inst);
-
-    return 0;
 }

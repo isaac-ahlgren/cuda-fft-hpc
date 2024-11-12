@@ -74,21 +74,21 @@ void fft_rec(float *arr, int delta, int n, complex_t* output) {
         output[0].imag = 0;
     }
     else {
-        fft_rec(arr, 2*delta, n/2, output);
-        fft_rec(arr + delta, 2*delta, n/2, output + n/2);
         int n2 = n / 2;
+        fft_rec(arr, 2*delta, n2, output);
+        fft_rec(arr + delta, 2*delta, n2, output + n2);
         complex_t w = {1,0};
-        complex_t w_n = {cos(TWO_PI/n), sin(TWO_PI/n)};
-        for (int i = 0; i <= n2; i++) {
+        complex_t w_n = {cos(-TWO_PI/n), sin(-TWO_PI/n)};
+        for (int i = 0; i < n2; i++) {
             //printf("w=%f + %fi , w_m=%f + %fi, m=%d, s=%d, i=%d\n", w.real, w.imag, w_n.real, w_n.imag, n, delta, i);
 
             complex_t p = output[i];
-            float q_r = w.real*output[i + n/2].real - w.imag*output[i + n/2].imag;
-            float q_i = w.real*output[i + n/2].imag + w.imag*output[i + n/2].real; 
+            float q_r = w.real*output[i + n2].real - w.imag*output[i + n2].imag;
+            float q_i = w.real*output[i + n2].imag + w.imag*output[i + n2].real; 
             complex_t q = {q_r, q_i};
 
             output[i].real = p.real + q.real; output[i].imag = p.imag + q.imag;
-            output[i + n/2].real = p.real - q.real; output[i + n/2].imag = p.imag - q.imag;
+            output[i + n2].real = p.real - q.real; output[i + n2].imag = p.imag - q.imag;
 
             //printf("(%f + %fi) + (%f + %fi) = %f + %fi \n", p.real, p.imag, q.real, q.imag, output[i].real, output[i].imag);
             //printf("(%f + %fi) - (%f + %fi) = %f + %fi \n", p.real, p.imag, q.real, q.imag, output[i + n/2].real, output[i + n/2].imag);
