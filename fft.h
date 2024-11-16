@@ -1,14 +1,12 @@
 #ifndef FFT_H_
 #define FFT_H_
 
+#include "util.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct complex_float {
-    float real;
-    float imag;
-} complex_t;
 
 void fft(float*, int, complex_t*);
 void fft_rec_wrapper(float*, int, complex_t*);
