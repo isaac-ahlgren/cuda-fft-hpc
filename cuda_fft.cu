@@ -6,6 +6,8 @@
 #include "cuda_fft.hpp"
 #include "util.h"
 
+#define MAX_THREADS_PER_BLOCK 512
+
 void create_twiddle_factors_lookup(int n, complex_t* twiddle_factors) {
     complex_t w = {1,0};
     complex_t w_n = {cos(-TWO_PI/n), sin(-TWO_PI/n)};
@@ -127,6 +129,17 @@ void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
     complex_t* dev_input = fft->buf1;
     complex_t* dev_output = fft->buf2;
 
+    int blocks;
+    int threads;
+    if (size > MAX_THREADS_PER_BLOCK) {
+        blocks = size / MAX_THREADS_PER_BLOCK;
+        threads = MAX_THREADS_PER_BLOCK;
+    }
+    else {
+        blocks = 1;
+        threads = size;
+    }
+
     int log_n = ceil(log2f(size));
 
     // Allocate memory and perform bit reversing on device
@@ -134,7 +147,7 @@ void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
     float* device_arr;
     cudaMalloc((void**)&device_arr, bytes);
     cudaMemcpy(device_arr, arr, bytes, cudaMemcpyHostToDevice);
-    copy_to_output<<<1,size>>>(device_arr, dev_input, size);
+    copy_to_output<<<blocks,threads>>>(device_arr, dev_input, size);
     cudaDeviceSynchronize();
     cudaFree(device_arr);
 
@@ -143,7 +156,7 @@ void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
         int m = 1 << (i+1);
         int m2 = m >> 1;
         step_size = step_size >> 1;
-        partial_butterfly_op<<<1,size>>>(dev_input, dev_output, m, m2, step_size, size/2 - 1, device_twiddle_factors);
+        partial_butterfly_op<<<blocks,threads>>>(dev_input, dev_output, m, m2, step_size, size/2 - 1, device_twiddle_factors);
         cudaDeviceSynchronize();
 
         complex_t* tmp = dev_output;
