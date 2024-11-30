@@ -3,6 +3,7 @@
 #include <string.h>
 #include <chrono>
 #include <iostream>
+#include <stdint.h>
 
 #include <fftw3.h>
 #include "fft.h"
@@ -14,7 +15,7 @@ int main(int argc, char* argv[]) {
 
     float rand_min = 0;
     float rand_max = 10;
-    int size = 64;
+    uint64_t size = 64;
 
 
     if (argc == 4){

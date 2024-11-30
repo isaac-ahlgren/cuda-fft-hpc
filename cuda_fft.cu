@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <cuda_runtime.h>
 
 #include "fft.h"
@@ -11,7 +12,7 @@
 void create_twiddle_factors_lookup(int n, complex_t* twiddle_factors) {
     complex_t w = {1,0};
     complex_t w_n = {cos(-TWO_PI/n), sin(-TWO_PI/n)};
-    for (int i = 0; i < n; i++) {
+    for (uint64_t i = 0; i < n; i++) {
         twiddle_factors[i] = w;
         float w_r = w.real*w_n.real - w.imag*w_n.imag;
         float w_i = w.real*w_n.imag + w.imag*w_n.real;
@@ -20,10 +21,10 @@ void create_twiddle_factors_lookup(int n, complex_t* twiddle_factors) {
     }
 }
 
-struct fft_instance* alloc_fft_instance(int size) {
+struct fft_instance* alloc_fft_instance(uint64_t size) {
     struct fft_instance* output = (struct fft_instance*) malloc(sizeof(fft_instance));
 
-    int bytes = sizeof(complex_t)*size;
+    uint64_t bytes = sizeof(complex_t)*size;
 
     // Allocating Host Side Twiddle Factors
     complex_t* twiddle_factors = (complex_t*) malloc(bytes);
@@ -84,9 +85,9 @@ __global__ void copy_to_output(float* arr, complex_t* output, int n) {
 
 __global__ void partial_butterfly_op(complex_t* input, complex_t* output, int n, int m2, int step_size, int module_mask, complex_t* twiddle_factors) 
 {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t index = blockIdx.x * blockDim.x + threadIdx.x;
 
-    int local_index = index % n;
+    uint64_t local_index = index % n;
 
     int pos_or_neg = 1;
 
@@ -94,9 +95,9 @@ __global__ void partial_butterfly_op(complex_t* input, complex_t* output, int n,
         pos_or_neg = -1;
     }
 
-    int reach_index = index + pos_or_neg*m2;
+    uint64_t reach_index = index + pos_or_neg*m2;
     
-    int i1, i2;
+    uint64_t i1, i2;
     if (local_index >= n/2) {
         i1 = index;
         i2 = reach_index;
@@ -106,7 +107,7 @@ __global__ void partial_butterfly_op(complex_t* input, complex_t* output, int n,
         i2 = index;
     }
 
-    int twi = (step_size * local_index) & module_mask;
+    uint64_t twi = (step_size * local_index) & module_mask;
 
     complex_t w = twiddle_factors[twi];
 
@@ -124,13 +125,13 @@ __global__ void partial_butterfly_op(complex_t* input, complex_t* output, int n,
 }
 
 void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
-    int size = fft->size;
+    uint64_t size = fft->size;
     complex_t* device_twiddle_factors = fft->device_twiddle_factors;
     complex_t* dev_input = fft->buf1;
     complex_t* dev_output = fft->buf2;
 
-    int blocks;
-    int threads;
+    uint64_t blocks;
+    uint64_t threads;
     if (size > MAX_THREADS_PER_BLOCK) {
         blocks = size / MAX_THREADS_PER_BLOCK;
         threads = MAX_THREADS_PER_BLOCK;
@@ -140,10 +141,10 @@ void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
         threads = size;
     }
 
-    int log_n = ceil(log2f(size));
+    uint64_t log_n = ceil(log2f(size));
 
     // Allocate memory and perform bit reversing on device
-    int bytes =  sizeof(float)*size;
+    uint64_t bytes =  sizeof(float)*size;
     float* device_arr;
     cudaMalloc((void**)&device_arr, bytes);
     cudaMemcpy(device_arr, arr, bytes, cudaMemcpyHostToDevice);
@@ -151,10 +152,10 @@ void cuda_fft(float* arr, complex_t* output, struct fft_instance* fft) {
     cudaDeviceSynchronize();
     cudaFree(device_arr);
 
-    int step_size = size;
+    uint64_t step_size = size;
     for (int i = 0; i < log_n; i++) {
-        int m = 1 << (i+1);
-        int m2 = m >> 1;
+        uint64_t m = 1 << (i+1);
+        uint64_t m2 = m >> 1;
         step_size = step_size >> 1;
         partial_butterfly_op<<<blocks,threads>>>(dev_input, dev_output, m, m2, step_size, size/2 - 1, device_twiddle_factors);
         cudaDeviceSynchronize();

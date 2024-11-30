@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "fft.h"
 #include "cuda_fft.hpp"
@@ -10,7 +11,7 @@ int main() {
     float rand_min = 0;
     float rand_max = 10;
 
-    int size = 64;
+    uint64_t size = 64;
 
     float* arr = (float*) malloc(size*sizeof(float));
     gen_rand(arr, size, rand_min, rand_max);
