@@ -12,7 +12,7 @@ extern "C" {
 
 void fft(float*, uint64_t, complex_t*);
 void fft_rec_wrapper(float*, uint64_t, complex_t*);
-uint64_t bit_reverse(uint64_t n, int size);
+uint64_t bit_reverse(uint64_t n, uint64_t size);
 
 #define TWO_PI ((float) 6.2831853071795864769252867665590057683943L)
 

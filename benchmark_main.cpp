@@ -4,11 +4,14 @@
 #include <chrono>
 #include <iostream>
 #include <stdint.h>
+#include <cufft.h>
+#include <cuda_runtime.h>
 
 #include <fftw3.h>
 #include "fft.h"
 #include "util.h"
 #include "cuda_fft.hpp"
+
 
 
 int main(int argc, char* argv[]) {
@@ -34,7 +37,6 @@ int main(int argc, char* argv[]) {
 	
     //print_real_array(arr, size);
     
-
     //fftw library
     fftwf_complex* output = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * (size));
     fftwf_plan plan = fftwf_plan_dft_r2c_1d(size, arr, output, FFTW_ESTIMATE);
@@ -69,7 +71,6 @@ int main(int argc, char* argv[]) {
     free(output2);
     std::cout << "Iterative FFT execution time: " << iter_duration.count() << " seconds" << std::endl;
 
-
     
     // Cuda FFT
     struct fft_instance* fft_inst = alloc_fft_instance(size);
@@ -82,5 +83,31 @@ int main(int argc, char* argv[]) {
     free(output3);
     free_fft_instance(fft_inst);
     std::cout << "Cuda FFT execution time: " << cuda_duration.count() << " seconds" << std::endl;
-    
+
+    // CuFFT
+    float* cuFFT_input;
+    cufftComplex* cuFFT_output;
+    cudaMalloc(&cuFFT_input, size * sizeof(float));
+    cudaMalloc(&cuFFT_output, sizeof(cufftComplex) * (size/2+1));
+
+    cudaMemcpy(cuFFT_input, arr, size * sizeof(float), cudaMemcpyHostToDevice);
+
+    cufftHandle cuFFT_plan;
+    cufftPlan1d(&cuFFT_plan, size, CUFFT_R2C, 1);
+
+    //cufftExecR2C(cuFFT_plan, cuFFT_input, cuFFT_output);
+
+    auto cufft_start = std::chrono::high_resolution_clock::now();
+    cufftExecR2C(cuFFT_plan, cuFFT_input, cuFFT_output);
+    cudaDeviceSynchronize(); // Ensure GPU operations are complete
+    auto cufft_end = std::chrono::high_resolution_clock::now();
+
+    std::chrono::duration<double> cufft_duration = cufft_end - cufft_start;
+    std::cout << "cuFFT execution time: " << cufft_duration.count() << " seconds" << std::endl;
+
+
+    cudaFree(cuFFT_input);
+    cudaFree(cuFFT_output);
+    cufftDestroy(cuFFT_plan);
+
 }
